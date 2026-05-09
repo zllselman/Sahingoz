@@ -237,6 +237,39 @@ class RPi5Camera:
             self.process.terminate()
             self.process.wait()
 
+class ThreadedCamera:
+    """Arka planda sürekli en yeni kareyi okuyarak buffer gecikmesini (lag) sıfırlayan asenkron sarmalayıcı sınıf."""
+    def __init__(self, camera_source):
+        self.camera = camera_source
+        self.ret = False
+        self.frame = None
+        self.running = True
+        
+        # İlk okumayı yap
+        self.ret, self.frame = self.camera.read()
+        
+        # Sürekli okuma yapan arka plan iş parçacığı
+        self.thread = threading.Thread(target=self._update, daemon=True)
+        self.thread.start()
+
+    def _update(self):
+        while self.running:
+            ret, frame = self.camera.read()
+            if ret:
+                self.ret = ret
+                self.frame = frame
+            else:
+                time.sleep(0.01)
+
+    def read(self):
+        # Her zaman en taze (en son) kareyi döndür
+        return self.ret, self.frame
+        
+    def release(self):
+        self.running = False
+        if hasattr(self.camera, 'release'):
+            self.camera.release()
+
 def get_libcamera_pipeline():
     """Raspberry Pi 5 ve IMX477 için donanım hızlandırmalı GStreamer pipeline'ı döndürür."""
     # libcamera gstreamer eklentisini kullanarak doğrudan donanım işleme
@@ -301,6 +334,10 @@ def hibrit_sistem_baslat():
             print("[KRİTİK HATA] Kamera bağlı değil! Sistem kamerasız çalışamaz. Kapatılıyor...")
             sistem_aktif = False
             sys.exit(1)
+            
+        print("[BİLGİ] Asenkron Kamera Okuyucu (Anti-Lag Thread) başlatılıyor...")
+        cap = ThreadedCamera(cap)
+        
     except Exception as e:
         print(f"[KRİTİK HATA] Kamera başlatma hatası: {e}. Sistem kapatılıyor...")
         sys.exit(1)
@@ -329,8 +366,8 @@ def hibrit_sistem_baslat():
                 if DISPLAY_AVAILABLE:
                     cv2.putText(frame_resized, "YAPAY ZEKA MODELI BULUNAMADI - KOR UCUS", (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
             else:
-                # YOLO Arama
-                results = yolo_model.track(frame_resized, persist=True, conf=0.35, iou=0.5, imgsz=640, verbose=False)
+                # YOLO Arama (Optimizasyon: imgsz 320'ye düşürüldü)
+                results = yolo_model.track(frame_resized, persist=True, conf=0.35, iou=0.5, imgsz=320, verbose=False)
                 
                 if results[0].boxes and len(results[0].boxes) > 0:
                     gorsel_kilit = True
