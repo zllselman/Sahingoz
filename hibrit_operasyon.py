@@ -260,6 +260,7 @@ def hibrit_sistem_baslat():
         if not cap.isOpened():
             print("[UYARI] GStreamer pipeline başlatılamadı. Standart V4L2 (/dev/video0) deneniyor...")
             cap = cv2.VideoCapture(0)
+            cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG')) # RAW format crash (reshape) çözümü
             cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
             cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
             
