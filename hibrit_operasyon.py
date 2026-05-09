@@ -234,12 +234,13 @@ def hibrit_sistem_baslat():
 
     try:
         if not os.path.exists(YOLO_MODEL_PATH):
-            print(f"[KRİTİK HATA] Görüntü modeli bulunamadı! Beklenen tam yol: {YOLO_MODEL_PATH}")
-            sys.exit(1)
-        yolo_model = YOLO(YOLO_MODEL_PATH)
+            print(f"[UYARI] Görüntü modeli bulunamadı! Beklenen tam yol: {YOLO_MODEL_PATH}")
+            yolo_model = None
+        else:
+            yolo_model = YOLO(YOLO_MODEL_PATH)
     except Exception as e:
-        print(f"[KRİTİK HATA] YOLO modeli başlatılamadı: {e}")
-        sys.exit(1)
+        print(f"[UYARI] YOLO modeli başlatılamadı: {e}. Görsel takip devre dışı.")
+        yolo_model = None
 
     # 2. Arka Plan Thread'lerini Başlat
     motor_thread = threading.Thread(target=motor_kontrol_dongusu, daemon=True)
@@ -263,11 +264,11 @@ def hibrit_sistem_baslat():
             cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
             
         if not cap.isOpened():
-            print("[KRİTİK HATA] Kamera hiçbir şekilde başlatılamadı. CSI şeridini kontrol edin.")
+            print("[KRİTİK HATA] Kamera bağlı değil! Sistem kamerasız çalışamaz. Kapatılıyor...")
             sistem_aktif = False
             sys.exit(1)
     except Exception as e:
-        print(f"[KRİTİK HATA] Kamera başlatma hatası: {e}")
+        print(f"[KRİTİK HATA] Kamera başlatma hatası: {e}. Sistem kapatılıyor...")
         sys.exit(1)
         
     ses_bekleme_sayaci = 0
@@ -279,50 +280,68 @@ def hibrit_sistem_baslat():
         while sistem_aktif:
             ret, frame = cap.read()
             if not ret: 
-                print("[HATA] Kameradan görüntü alınamıyor!")
+                print("[KRİTİK HATA] Kameradan görüntü alınamıyor, bağlantı kopmuş olabilir! Sistem durduruluyor...")
+                sistem_aktif = False
                 break
                 
             # Performans için yeniden boyutlandır (imgsz optimizasyonu)
             frame_resized = cv2.resize(frame, (640, 480))
-
-            # YOLO Arama
-            results = yolo_model.track(frame_resized, persist=True, conf=0.35, iou=0.5, imgsz=640, verbose=False)
             
-            if results[0].boxes and len(results[0].boxes) > 0:
-                gorsel_kilit = True
-                boxes = results[0].boxes.xyxy.cpu().numpy().astype(int)
-                box = boxes[0] 
-                x1, y1, x2, y2 = box
-                cx = int((x1 + x2) / 2)
-                cy = int((y1 + y2) / 2)
-                
-                ekran_merkez_x = 320 # 640/2
-                ekran_merkez_y = 240 # 480/2
-                
-                global takip_hatasi_x, takip_hatasi_y
-                takip_hatasi_x = cx - ekran_merkez_x
-                takip_hatasi_y = cy - ekran_merkez_y
-                
-                if abs(takip_hatasi_x) > 30 or abs(takip_hatasi_y) > 30:
-                    print(f"[TAKİP] Dinamik Takip Aktif! Taret drone'u izliyor... (Hata X: {takip_hatasi_x}, Y: {takip_hatasi_y})")
-                else:
-                    print(f"[KİLİT] Hedef Merkezde! (Koordinat: {cx}, {cy})")
-                    atesleme_mekanizmasi(box)
+            # HUD (Heads Up Display) Arka Plan Bilgileri
+            if DISPLAY_AVAILABLE:
+                cv2.putText(frame_resized, "SAHINGOZU OTONOM MOD: AKTIF", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
 
-                ses_bekleme_sayaci = 0
-                
-                # Ekranda çizim yap
-                cv2.rectangle(frame_resized, (x1, y1), (x2, y2), (0, 0, 255), 3)
-                cv2.line(frame_resized, (cx - 20, cy), (cx + 20, cy), (0, 0, 255), 2)
-                cv2.line(frame_resized, (cx, cy - 20), (cx, cy + 20), (0, 0, 255), 2)
+            if yolo_model is None:
+                if DISPLAY_AVAILABLE:
+                    cv2.putText(frame_resized, "YAPAY ZEKA MODELI BULUNAMADI - KOR UCUS", (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
             else:
-                gorsel_kilit = False
-                if hedef_acisi is not None:
-                    ses_bekleme_sayaci += 1
-                    if ses_bekleme_sayaci > SES_BEKLEME_MAX:
-                        print("[BİLGİ] Ses yönünde hedef bulunamadı. 360 taramaya devam ediliyor.")
-                        hedef_acisi = None
-                        ses_bekleme_sayaci = 0
+                # YOLO Arama
+                results = yolo_model.track(frame_resized, persist=True, conf=0.35, iou=0.5, imgsz=640, verbose=False)
+                
+                if results[0].boxes and len(results[0].boxes) > 0:
+                    gorsel_kilit = True
+                    boxes = results[0].boxes.xyxy.cpu().numpy().astype(int)
+                    box = boxes[0] 
+                    x1, y1, x2, y2 = box
+                    cx = int((x1 + x2) / 2)
+                    cy = int((y1 + y2) / 2)
+                    
+                    ekran_merkez_x = 320 # 640/2
+                    ekran_merkez_y = 240 # 480/2
+                    
+                    global takip_hatasi_x, takip_hatasi_y
+                    takip_hatasi_x = cx - ekran_merkez_x
+                    takip_hatasi_y = cy - ekran_merkez_y
+                    
+                    if abs(takip_hatasi_x) > 30 or abs(takip_hatasi_y) > 30:
+                        hedef_durumu = "TAKIP EDILIYOR"
+                        renk = (0, 165, 255) # Turuncu
+                        print(f"[TAKİP] Dinamik Takip Aktif! Taret drone'u izliyor... (Hata X: {takip_hatasi_x}, Y: {takip_hatasi_y})")
+                    else:
+                        hedef_durumu = "ATESLEME HAZIR - KILITLI"
+                        renk = (0, 0, 255) # Kırmızı
+                        print(f"[KİLİT] Hedef Merkezde! (Koordinat: {cx}, {cy})")
+                        atesleme_mekanizmasi(box)
+
+                    ses_bekleme_sayaci = 0
+                    
+                    # Ekranda çizim yap
+                    cv2.rectangle(frame_resized, (x1, y1), (x2, y2), renk, 3)
+                    cv2.line(frame_resized, (cx - 20, cy), (cx + 20, cy), renk, 2)
+                    cv2.line(frame_resized, (cx, cy - 20), (cx, cy + 20), renk, 2)
+                    
+                    # Dinamik HUD Yazıları
+                    if DISPLAY_AVAILABLE:
+                        cv2.putText(frame_resized, f"DURUM: {hedef_durumu}", (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, renk, 2)
+                        cv2.putText(frame_resized, f"HATA PAYI -> X: {takip_hatasi_x} Y: {takip_hatasi_y}", (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+                else:
+                    gorsel_kilit = False
+                    if hedef_acisi is not None:
+                        ses_bekleme_sayaci += 1
+                        if ses_bekleme_sayaci > SES_BEKLEME_MAX:
+                            print("[BİLGİ] Ses yönünde hedef bulunamadı. 360 taramaya devam ediliyor.")
+                            hedef_acisi = None
+                            ses_bekleme_sayaci = 0
 
             # -------------------------------------------------------------
             # EKRANSIZ (HEADLESS) MOD KORUMASI VE GÖSTERİM

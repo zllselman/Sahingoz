@@ -38,18 +38,16 @@ if __name__ == "__main__":
     
     if check_hdmi_connected():
         print("[BİLGİ] HDMI Ekran Algılandı.")
-        print("[BİLGİ] Geliştirici/Dosya Yönetimi Moduna Geçildi.")
-        print("[BİLGİ] Yeni modellerinizi ilgili klasörlere ekleyebilirsiniz.")
-        print("[BİLGİ] Otonom savunma sistemi başlatılmadı.")
-        sys.exit(0)
+        print("[BİLGİ] Otonom sistem GÖRSEL modda başlatılıyor...")
     else:
         print("[BİLGİ] HDMI Bağlantısı Yok. (Headless Mod)")
-        print("[BİLGİ] Şahingözü Otonom Tarama ve Savunma Modu Başlatılıyor...")
-        print("================================================\n")
+        print("[BİLGİ] Otonom sistem EKRANSIZ modda başlatılıyor...")
         
-        # Otonom sistemi çalıştır
-        target_script = "hibrit_operasyon.py"
-        if os.path.exists(target_script):
-            subprocess.run([sys.executable, target_script])
-        else:
-            print(f"[CRITICAL] {target_script} bulunamadı! Sistem durduruldu.")
+    print("================================================\n")
+    
+    # Otonom sistemi çalıştır
+    target_script = "hibrit_operasyon.py"
+    if os.path.exists(target_script):
+        subprocess.run([sys.executable, target_script])
+    else:
+        print(f"[CRITICAL] {target_script} bulunamadı! Sistem durduruldu.")
