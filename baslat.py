@@ -48,10 +48,6 @@ if __name__ == "__main__":
     # Otonom sistemi çalıştır
     target_script = "hibrit_operasyon.py"
     if os.path.exists(target_script):
-        # Raspberry Pi 5 libcamera V4L2 köprüsü (Kamera Hatası Çözümü)
-        try:
-            subprocess.run(["libcamerify", sys.executable, target_script])
-        except FileNotFoundError:
-            subprocess.run([sys.executable, target_script])
+        subprocess.run([sys.executable, target_script])
     else:
         print(f"[CRITICAL] {target_script} bulunamadı! Sistem durduruldu.")

@@ -9,6 +9,7 @@ import librosa
 import joblib
 import threading
 import warnings
+import subprocess
 
 # ====================================================================
 # RASPBERRY PI 5 - GPIOZERO ve LGPIO ENTEGRASYONU
@@ -204,6 +205,38 @@ def atesleme_mekanizmasi(hedef_box):
     else:
         print("🔥 [ATEŞLEME] HEDEF VURULUYOR!!! (Simülasyon Modu)")
 
+class RPi5Camera:
+    """Raspberry Pi 5 için OpenCV uyumsuzluğuna karşı doğrudan native rpicam-vid okuyucusu."""
+    def __init__(self, width=640, height=480, framerate=30):
+        self.width = width
+        self.height = height
+        self.frame_size = int(width * height * 1.5)
+        
+        cmd_name = "rpicam-vid" if os.path.exists("/usr/bin/rpicam-vid") else "libcamera-vid"
+        self.cmd = [
+            cmd_name, "-t", "0", "--width", str(width), "--height", str(height),
+            "--framerate", str(framerate), "--codec", "yuv420", "--inline", "--nopreview", "-o", "-"
+        ]
+        self.process = subprocess.Popen(self.cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, bufsize=self.frame_size*3)
+        self._is_opened = self.process.poll() is None
+
+    def isOpened(self):
+        return self._is_opened and self.process.poll() is None
+
+    def read(self):
+        if not self.isOpened(): return False, None
+        raw_data = self.process.stdout.read(self.frame_size)
+        if len(raw_data) != self.frame_size:
+            self._is_opened = False
+            return False, None
+        yuv = np.frombuffer(raw_data, dtype=np.uint8).reshape((int(self.height * 1.5), self.width))
+        return True, cv2.cvtColor(yuv, cv2.COLOR_YUV2BGR_I420)
+
+    def release(self):
+        if hasattr(self, 'process') and self.process:
+            self.process.terminate()
+            self.process.wait()
+
 def get_libcamera_pipeline():
     """Raspberry Pi 5 ve IMX477 için donanım hızlandırmalı GStreamer pipeline'ı döndürür."""
     # libcamera gstreamer eklentisini kullanarak doğrudan donanım işleme
@@ -250,19 +283,19 @@ def hibrit_sistem_baslat():
         audio_thread = threading.Thread(target=audio_listener, args=(audio_clf,), daemon=True)
         audio_thread.start()
 
-    # 3. Kamera Başlat (GStreamer / libcamera Pipeline)
+    # 3. Kamera Başlat
     try:
-        print("[KONTROL] libcamera pipeline'ı ile kamera başlatılıyor...")
-        pipeline = get_libcamera_pipeline()
-        cap = cv2.VideoCapture(pipeline, cv2.CAP_GSTREAMER)
+        print("[KONTROL] Standart OpenCV V4L2 kamerası deneniyor...")
+        cap = cv2.VideoCapture(0)
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
         
-        # GStreamer başarısız olursa V4L2'ye geri dön (Güvenlik Ağı)
-        if not cap.isOpened():
-            print("[UYARI] GStreamer pipeline başlatılamadı. Standart V4L2 (/dev/video0) deneniyor...")
-            cap = cv2.VideoCapture(0)
-            cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG')) # RAW format crash (reshape) çözümü
-            cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+        # Test okuması yap. Pi 5 üzerinde cv2 genelde okuyamaz ve ret=False döner
+        ret, test_frame = cap.read()
+        if not ret or test_frame is None:
+            cap.release()
+            print("[UYARI] OpenCV standart kamera okuması başarısız. Raspberry Pi 5 Native (rpicam-vid) okuyucusuna geçiliyor...")
+            cap = RPi5Camera(width=640, height=480, framerate=30)
             
         if not cap.isOpened():
             print("[KRİTİK HATA] Kamera bağlı değil! Sistem kamerasız çalışamaz. Kapatılıyor...")
