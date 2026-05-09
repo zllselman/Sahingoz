@@ -235,7 +235,7 @@ def yolo_worker_dongusu(yolo_model):
         frame_to_process = son_frame_yolo_icin.copy()
         
         # YOLO arama işlemi (Bu işlem ne kadar sürerse sürsün ana ekran kilitlenmez)
-        results = yolo_model.track(frame_to_process, persist=True, conf=0.35, iou=0.5, imgsz=320, verbose=False)
+        results = yolo_model.track(frame_to_process, persist=True, conf=0.35, iou=0.5, imgsz=640, verbose=False)
         
         if results[0].boxes and len(results[0].boxes) > 0:
             gorsel_kilit = True
