@@ -12,6 +12,19 @@ import warnings
 import subprocess
 
 # ====================================================================
+# GLOBAL DEĞİŞKENLER (THREAD İLETİŞİMİ)
+# ====================================================================
+yolo_sonuclar = {
+    "kutu_var": False,
+    "x1": 0, "y1": 0, "x2": 0, "y2": 0,
+    "cx": 0, "cy": 0,
+    "hedef_durumu": "",
+    "renk": (0, 255, 0)
+}
+son_frame_yolo_icin = None
+yolo_aktif = True
+
+# ====================================================================
 # RASPBERRY PI 5 - GPIOZERO ve LGPIO ENTEGRASYONU
 # ====================================================================
 try:
@@ -205,6 +218,57 @@ def atesleme_mekanizmasi(hedef_box):
     else:
         print("🔥 [ATEŞLEME] HEDEF VURULUYOR!!! (Simülasyon Modu)")
 
+def yolo_worker_dongusu(yolo_model):
+    """Arka planda (Ayrı bir Thread'de) YOLO'yu çalıştırarak ana ekranın kasmasını engeller."""
+    global sistem_aktif, yolo_aktif, son_frame_yolo_icin, yolo_sonuclar, gorsel_kilit
+    global takip_hatasi_x, takip_hatasi_y
+    
+    ekran_merkez_x = 320
+    ekran_merkez_y = 240
+    
+    while sistem_aktif and yolo_aktif:
+        if son_frame_yolo_icin is None:
+            time.sleep(0.01)
+            continue
+            
+        # O anki frame'in kopyasını al (çakışmayı önlemek için)
+        frame_to_process = son_frame_yolo_icin.copy()
+        
+        # YOLO arama işlemi (Bu işlem ne kadar sürerse sürsün ana ekran kilitlenmez)
+        results = yolo_model.track(frame_to_process, persist=True, conf=0.35, iou=0.5, imgsz=320, verbose=False)
+        
+        if results[0].boxes and len(results[0].boxes) > 0:
+            gorsel_kilit = True
+            boxes = results[0].boxes.xyxy.cpu().numpy().astype(int)
+            box = boxes[0] 
+            x1, y1, x2, y2 = box
+            cx = int((x1 + x2) / 2)
+            cy = int((y1 + y2) / 2)
+            
+            takip_hatasi_x = cx - ekran_merkez_x
+            takip_hatasi_y = cy - ekran_merkez_y
+            
+            if abs(takip_hatasi_x) > 30 or abs(takip_hatasi_y) > 30:
+                yolo_sonuclar["hedef_durumu"] = "TAKIP EDILIYOR"
+                yolo_sonuclar["renk"] = (0, 165, 255) # Turuncu
+            else:
+                yolo_sonuclar["hedef_durumu"] = "ATESLEME HAZIR - KILITLI"
+                yolo_sonuclar["renk"] = (0, 0, 255) # Kırmızı
+                atesleme_mekanizmasi(box)
+
+            yolo_sonuclar["kutu_var"] = True
+            yolo_sonuclar["x1"] = x1
+            yolo_sonuclar["y1"] = y1
+            yolo_sonuclar["x2"] = x2
+            yolo_sonuclar["y2"] = y2
+            yolo_sonuclar["cx"] = cx
+            yolo_sonuclar["cy"] = cy
+        else:
+            gorsel_kilit = False
+            yolo_sonuclar["kutu_var"] = False
+            
+        time.sleep(0.01) # Aşırı CPU kullanımını engellemek için mini mola
+
 class RPi5Camera:
     """Raspberry Pi 5 için OpenCV uyumsuzluğuna karşı doğrudan native rpicam-vid okuyucusu."""
     def __init__(self, width=640, height=480, framerate=30):
@@ -316,6 +380,11 @@ def hibrit_sistem_baslat():
         audio_thread = threading.Thread(target=audio_listener, args=(audio_clf,), daemon=True)
         audio_thread.start()
 
+    if yolo_model is not None:
+        print("[BİLGİ] Yapay Zeka (YOLO) Çekirdeği Asenkron Olarak Başlatılıyor...")
+        yolo_thread = threading.Thread(target=yolo_worker_dongusu, args=(yolo_model,), daemon=True)
+        yolo_thread.start()
+
     # 3. Kamera Başlat
     try:
         print("[KONTROL] Standart OpenCV V4L2 kamerası deneniyor...")
@@ -358,6 +427,10 @@ def hibrit_sistem_baslat():
             # Performans için yeniden boyutlandır (imgsz optimizasyonu)
             frame_resized = cv2.resize(frame, (640, 480))
             
+            # YOLO thread'ine güncel kareyi besle
+            global son_frame_yolo_icin
+            son_frame_yolo_icin = frame_resized
+
             # HUD (Heads Up Display) Arka Plan Bilgileri
             if DISPLAY_AVAILABLE:
                 cv2.putText(frame_resized, "SAHINGOZU OTONOM MOD: AKTIF", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
@@ -366,34 +439,13 @@ def hibrit_sistem_baslat():
                 if DISPLAY_AVAILABLE:
                     cv2.putText(frame_resized, "YAPAY ZEKA MODELI BULUNAMADI - KOR UCUS", (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
             else:
-                # YOLO Arama (Optimizasyon: imgsz 320'ye düşürüldü)
-                results = yolo_model.track(frame_resized, persist=True, conf=0.35, iou=0.5, imgsz=320, verbose=False)
-                
-                if results[0].boxes and len(results[0].boxes) > 0:
-                    gorsel_kilit = True
-                    boxes = results[0].boxes.xyxy.cpu().numpy().astype(int)
-                    box = boxes[0] 
-                    x1, y1, x2, y2 = box
-                    cx = int((x1 + x2) / 2)
-                    cy = int((y1 + y2) / 2)
+                # YAPAY ZEKA (YOLO) ÇİZİMLERİNİ EKRANA BAS (Ana döngü gecikmesiz çalışır)
+                if yolo_sonuclar["kutu_var"]:
+                    x1, y1, x2, y2 = yolo_sonuclar["x1"], yolo_sonuclar["y1"], yolo_sonuclar["x2"], yolo_sonuclar["y2"]
+                    cx, cy = yolo_sonuclar["cx"], yolo_sonuclar["cy"]
+                    renk = yolo_sonuclar["renk"]
+                    hedef_durumu = yolo_sonuclar["hedef_durumu"]
                     
-                    ekran_merkez_x = 320 # 640/2
-                    ekran_merkez_y = 240 # 480/2
-                    
-                    global takip_hatasi_x, takip_hatasi_y
-                    takip_hatasi_x = cx - ekran_merkez_x
-                    takip_hatasi_y = cy - ekran_merkez_y
-                    
-                    if abs(takip_hatasi_x) > 30 or abs(takip_hatasi_y) > 30:
-                        hedef_durumu = "TAKIP EDILIYOR"
-                        renk = (0, 165, 255) # Turuncu
-                        print(f"[TAKİP] Dinamik Takip Aktif! Taret drone'u izliyor... (Hata X: {takip_hatasi_x}, Y: {takip_hatasi_y})")
-                    else:
-                        hedef_durumu = "ATESLEME HAZIR - KILITLI"
-                        renk = (0, 0, 255) # Kırmızı
-                        print(f"[KİLİT] Hedef Merkezde! (Koordinat: {cx}, {cy})")
-                        atesleme_mekanizmasi(box)
-
                     ses_bekleme_sayaci = 0
                     
                     # Ekranda çizim yap
@@ -406,7 +458,6 @@ def hibrit_sistem_baslat():
                         cv2.putText(frame_resized, f"DURUM: {hedef_durumu}", (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, renk, 2)
                         cv2.putText(frame_resized, f"HATA PAYI -> X: {takip_hatasi_x} Y: {takip_hatasi_y}", (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
                 else:
-                    gorsel_kilit = False
                     if hedef_acisi is not None:
                         ses_bekleme_sayaci += 1
                         if ses_bekleme_sayaci > SES_BEKLEME_MAX:
