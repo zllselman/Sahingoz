@@ -104,9 +104,9 @@ def motor_kontrol_dongusu():
     # 45 saniyede 1 tur atan Pan motor hızı (Kalibrasyon değeri: 0.05)
     SWEEP_SPEED = 0.05
     
-    # Tilt motor sınırları: 45 derece (0.5) ile 75 derece (0.833) arasında
+    # Tilt motor sınırları: 45 derece (0.5) ile 90 derece (1.0) arasında
     MIN_TILT = 45 / 90.0   # 0.5
-    MAX_TILT = 75 / 90.0   # ~0.833
+    MAX_TILT = 90 / 90.0   # 1.0
     
     print("[MOTOR] 360 Derece Tarama Motoru (Pan) ve 180 Derece Tilt Motoru Başlatıldı.")
     
