@@ -56,7 +56,12 @@ YOLO_MODEL_PATH = os.path.join(BASE_DIR, "best.pt")
 SES_MODEL_PATH = os.path.join(BASE_DIR, "drone_audio_model.joblib")
 
 # Headless kontrolü: Ortam değişkenlerinde DISPLAY var mı?
-DISPLAY_AVAILABLE = 'DISPLAY' in os.environ or 'WAYLAND_DISPLAY' in os.environ
+try:
+    import socket
+    socket.create_connection(('localhost', 6000), timeout=1)
+    DISPLAY_AVAILABLE = True
+except (OSError, socket.error, socket.timeout):
+    DISPLAY_AVAILABLE = 'DISPLAY' in os.environ or 'WAYLAND_DISPLAY' in os.environ
 
 # ====================================================================
 # DONANIM (GPIO) PİN TANIMLAMALARI (Raspberry Pi 5)
@@ -224,30 +229,47 @@ def audio_listener():
     BUFFER_SIZE = int(SAMPLE_RATE * DURATION)
     
     def extract_features(audio_data):
-        """Ses verisinden özellik çıkarımı."""
-        # MFCC özelliklerini çıkar
-        mfccs = librosa.feature.mfcc(y=audio_data, sr=SAMPLE_RATE, n_mfcc=13)
-        mfccs_mean = np.mean(mfccs, axis=1)
-        
-        # Spektral centroid
-        spectral_centroid = librosa.feature.spectral_centroid(y=audio_data, sr=SAMPLE_RATE)[0]
-        spectral_centroid_mean = np.mean(spectral_centroid)
-        
-        # RMS enerji
-        rms = librosa.feature.rms(y=audio_data)[0]
-        rms_mean = np.mean(rms)
-        
-        # Zero crossing rate
-        zcr = librosa.feature.zero_crossing_rate(y=audio_data)[0]
-        zcr_mean = np.mean(zcr)
-        
-        # Özellikleri birleştir
-        features = np.concatenate([
-            mfccs_mean,
-            [spectral_centroid_mean, rms_mean, zcr_mean]
-        ])
-        
-        return features
+        """Ses verisinden özellik çıkarımı (160 feature)."""
+        try:
+            # MFCC özelliklerini çıkar (13 MFCC * 10 frame = 130)
+            mfccs = librosa.feature.mfcc(y=audio_data, sr=SAMPLE_RATE, n_mfcc=13, n_fft=2048, hop_length=512)
+            if mfccs.shape[1] < 10:
+                mfccs = np.pad(mfccs, ((0,0), (0, 10-mfccs.shape[1])), mode='constant')
+            mfccs_flat = mfccs[:, :10].flatten()  # 130 features
+            
+            # Spektral özellikler
+            spectral_centroid = librosa.feature.spectral_centroid(y=audio_data, sr=SAMPLE_RATE)[0][:10]
+            if len(spectral_centroid) < 10:
+                spectral_centroid = np.pad(spectral_centroid, (0, 10-len(spectral_centroid)), mode='constant')
+            
+            # RMS enerji
+            rms = librosa.feature.rms(y=audio_data)[0][:10]
+            if len(rms) < 10:
+                rms = np.pad(rms, (0, 10-len(rms)), mode='constant')
+            
+            # Zero crossing rate
+            zcr = librosa.feature.zero_crossing_rate(y=audio_data)[0][:10]
+            if len(zcr) < 10:
+                zcr = np.pad(zcr, (0, 10-len(zcr)), mode='constant')
+            
+            # Spectral rolloff
+            spectral_rolloff = librosa.feature.spectral_rolloff(y=audio_data, sr=SAMPLE_RATE)[0][:10]
+            if len(spectral_rolloff) < 10:
+                spectral_rolloff = np.pad(spectral_rolloff, (0, 10-len(spectral_rolloff)), mode='constant')
+            
+            # Özellikleri birleştir (130 + 10 + 10 + 10 = 160)
+            features = np.concatenate([
+                mfccs_flat,
+                spectral_centroid,
+                rms,
+                zcr,
+                spectral_rolloff
+            ])
+            
+            return features[:160]  # Tam olarak 160 feature döndür
+        except Exception as e:
+            print(f"[UYARI] Feature çıkarımı hatası: {e}")
+            return np.zeros(160)  # Hata durumunda sıfır vektörü döndür
     
     while sistem_aktif:
         if gorsel_kilit:
@@ -259,6 +281,11 @@ def audio_listener():
             recording = sd.rec(int(BUFFER_SIZE), samplerate=SAMPLE_RATE, channels=2, dtype='float32', device=audio_device)
             sd.wait()
             
+            if recording is None or recording.size == 0:
+                print(f"[UYARI] Ses kaydı boş geldi.")
+                time.sleep(0.5)
+                continue
+            
             # Sol ve sağ kanalları ayır
             left_channel = recording[:, 0]
             right_channel = recording[:, 1]
@@ -266,6 +293,11 @@ def audio_listener():
             # Her kanal için özellik çıkar ve tahmin yap
             left_features = extract_features(left_channel).reshape(1, -1)
             right_features = extract_features(right_channel).reshape(1, -1)
+            
+            if left_features.shape[1] != 160 or right_features.shape[1] != 160:
+                print(f"[UYARI] Feature sayısı hatalı: left={left_features.shape[1]}, right={right_features.shape[1]}")
+                time.sleep(0.5)
+                continue
             
             left_prediction = ses_modeli.predict(left_features)[0]
             right_prediction = ses_modeli.predict(right_features)[0]
