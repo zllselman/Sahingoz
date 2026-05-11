@@ -156,6 +156,34 @@ def motor_kontrol_dongusu():
 # ====================================================================
 # 2. AKUSTİK İŞLEME MODÜLÜ (SES MODELİ İLE STEREO DİNLEME)
 # ====================================================================
+def list_audio_input_devices():
+    try:
+        devices = sd.query_devices()
+        print("[AKUSTİK] Mevcut ses giriş cihazları taranıyor...")
+        for idx, dev in enumerate(devices):
+            if dev['max_input_channels'] > 0:
+                print(f"  [{idx}] {dev['name']} | input_channels={dev['max_input_channels']} | default_sr={dev['default_samplerate']}")
+        return devices
+    except Exception as e:
+        print(f"[AKUSTİK] Ses cihazları listelenemedi: {e}")
+        return []
+
+
+def select_audio_input_device():
+    devices = list_audio_input_devices()
+    for idx, dev in enumerate(devices):
+        if dev['max_input_channels'] >= 2:
+            print(f"[AKUSTİK] Stereo giriş cihazı seçildi: {dev['name']} (#{idx})")
+            return idx
+    try:
+        default_device = sd.default.device
+        if isinstance(default_device, tuple):
+            return default_device[0]
+        return int(default_device)
+    except Exception:
+        return None
+
+
 def audio_listener():
     global sistem_aktif, hedef_acisi, gorsel_kilit, ses_modeli
     
@@ -165,8 +193,32 @@ def audio_listener():
         print("[UYARI] Ses modeli bulunamadı! Akustik tespit devre dışı.")
         return
     
-    # Ses kayıt parametreleri
-    SAMPLE_RATE = 44100
+    audio_device = select_audio_input_device()
+    if audio_device is None:
+        print("[UYARI] Stereo ses girişi bulunamadı! Akustik tespit devre dışı.")
+        return
+
+    try:
+        sd.default.device = (audio_device, None)
+    except Exception as e:
+        print(f"[UYARI] Ses cihazı atanamadı: {e}")
+        return
+
+    available_rates = [44100, 48000, 32000, 22050, 16000]
+    SAMPLE_RATE = None
+    for rate in available_rates:
+        try:
+            sd.check_input_settings(device=audio_device, samplerate=rate, channels=2)
+            SAMPLE_RATE = rate
+            print(f"[AKUSTİK] Kullanılacak sample rate: {SAMPLE_RATE}")
+            break
+        except Exception:
+            continue
+
+    if SAMPLE_RATE is None:
+        print("[UYARI] Uygun sample rate bulunamadı! Akustik tespit devre dışı.")
+        return
+
     DURATION = 1.0  # 1 saniyelik kayıt
     BUFFER_SIZE = int(SAMPLE_RATE * DURATION)
     
@@ -422,11 +474,23 @@ def hibrit_sistem_baslat():
         ret, test_frame = cap.read()
         if not ret or test_frame is None:
             cap.release()
-            print("[UYARI] OpenCV standart kamera okuması başarısız. Raspberry Pi 5 Native (rpicam-vid) okuyucusuna geçiliyor...")
+            print("[UYARI] OpenCV standart kamera okuması başarısız. libcamera GStreamer pipeline deneniyor...")
+            cap = cv2.VideoCapture(get_libcamera_pipeline(), cv2.CAP_GSTREAMER)
+            if cap.isOpened():
+                ret, test_frame = cap.read()
+
+        if not cap.isOpened() or not ret or test_frame is None:
+            if cap is not None:
+                try:
+                    cap.release()
+                except Exception:
+                    pass
+            print("[UYARI] GStreamer pipeline da başarısız. Raspberry Pi 5 Native (rpicam-vid) okuyucusuna geçiliyor...")
             cap = RPi5Camera(width=640, height=480, framerate=30)
-            
-        if not cap.isOpened():
-            print("[KRİTİK HATA] Kamera bağlı değil! Sistem kamerasız çalışamaz. Kapatılıyor...")
+            ret, test_frame = cap.read()
+
+        if not cap.isOpened() or not ret or test_frame is None:
+            print("[KRİTİK HATA] Kamera bağlı değil veya okuma alınamıyor! Sistem kamerasız çalışamaz. Kapatılıyor...")
             sistem_aktif = False
             sys.exit(1)
             
