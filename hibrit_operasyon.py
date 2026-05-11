@@ -102,13 +102,17 @@ def motor_kontrol_dongusu():
     global sistem_aktif, hedef_acisi, gorsel_kilit, takip_hatasi_x, takip_hatasi_y
     
     # 45 saniyede 1 tur atan Pan motor hızı (Kalibrasyon değeri: 0.05)
-    SWEEP_SPEED = 0.05 
+    SWEEP_SPEED = 0.05
+    
+    # Tilt motor sınırları: 45 derece (0.5) ile 75 derece (0.833) arasında
+    MIN_TILT = 45 / 90.0   # 0.5
+    MAX_TILT = 75 / 90.0   # ~0.833
     
     print("[MOTOR] 360 Derece Tarama Motoru (Pan) ve 180 Derece Tilt Motoru Başlatıldı.")
     
     if GPIO_AVAILABLE:
         pan_servo.value = 0.0
-        tilt_servo.value = 0.0 
+        tilt_servo.value = MIN_TILT  # Başlangış pozisyonu: 45 derece
     
     while sistem_aktif:
         if gorsel_kilit:
@@ -121,18 +125,18 @@ def motor_kontrol_dongusu():
                 else:
                     pan_servo.value = 0.0
                     
-                # Tilt Takip (Yukarı/Aşağı)
+                # Tilt Takip (Yukarı/Aşağı) - 45-75 derece arasında sınırlı
                 if abs(takip_hatasi_y) > 30:
                     mevcut_tilt = tilt_servo.value
                     düzeltme = -0.02 if takip_hatasi_y > 0 else 0.02
-                    tilt_servo.value = max(min(mevcut_tilt + düzeltme, 1.0), -1.0)
+                    tilt_servo.value = max(min(mevcut_tilt + düzeltme, MAX_TILT), MIN_TILT)
                 
             time.sleep(0.02)
             continue
             
-        # Görsel kilit yoksa ve tehdit yoksa, Tilt motoru daima sabit durur (Ufuk çizgisi)
-        if GPIO_AVAILABLE and tilt_servo.value != 0.0:
-            tilt_servo.value = 0.0
+        # Görsel kilit yoksa ve tehdit yoksa, Tilt motoru sabit durur (45 derece)
+        if GPIO_AVAILABLE and tilt_servo.value != MIN_TILT:
+            tilt_servo.value = MIN_TILT
             
         if hedef_acisi is None:
             # 360 Derece Sürekli Tarama (Sürekli dön)
@@ -147,7 +151,7 @@ def motor_kontrol_dongusu():
             time.sleep(1) # Dönüş süresi kalibrasyonu
             if GPIO_AVAILABLE:
                 pan_servo.value = 0.0 # Dur ve kameranın (YOLO'nun) tespit etmesini bekle
-            hedef_acisi = None 
+            hedef_acisi = None
 
 # ====================================================================
 # 2. AKUSTİK İŞLEME MODÜLÜ (SES MODELİ İLE STEREO DİNLEME)
