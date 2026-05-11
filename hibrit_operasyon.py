@@ -4,12 +4,14 @@ from ultralytics import YOLO
 import time
 import os
 import sys
-import sounddevice as sd
-import librosa
-import joblib
+import threading
+import warnings
 import threading
 import warnings
 import subprocess
+import sounddevice as sd
+import librosa
+import joblib
 
 # ====================================================================
 # GLOBAL DEĞİŞKENLER (THREAD İLETİŞİMİ)
@@ -23,6 +25,9 @@ yolo_sonuclar = {
 }
 son_frame_yolo_icin = None
 yolo_aktif = True
+
+# Ses modeli
+ses_modeli = None
 
 # ====================================================================
 # RASPBERRY PI 5 - GPIOZERO ve LGPIO ENTEGRASYONU
@@ -47,11 +52,8 @@ warnings.filterwarnings('ignore')
 # ====================================================================
 # Scriptin bulunduğu dizini baz alır
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-AUDIO_MODEL_PATH = os.path.join(BASE_DIR, "drone_audio_model.joblib")
 YOLO_MODEL_PATH = os.path.join(BASE_DIR, "best.pt")
-
-SAMPLE_RATE = 22050
-DURATION = 1.0 # 1 saniyelik dinleme blokları
+SES_MODEL_PATH = os.path.join(BASE_DIR, "drone_audio_model.joblib")
 
 # Headless kontrolü: Ortam değişkenlerinde DISPLAY var mı?
 DISPLAY_AVAILABLE = 'DISPLAY' in os.environ or 'WAYLAND_DISPLAY' in os.environ
@@ -61,7 +63,7 @@ DISPLAY_AVAILABLE = 'DISPLAY' in os.environ or 'WAYLAND_DISPLAY' in os.environ
 # ====================================================================
 if GPIO_AVAILABLE:
     # Pan Motoru: Tower Pro MG995 (360 Derece Sürekli Dönen Servo)
-    pan_servo = Servo(17) 
+    pan_servo = Servo(12) 
     
     # Tilt Motoru: Tower Pro MG995 (180 Derece Standart Servo)
     tilt_servo = Servo(13)
@@ -99,112 +101,131 @@ MIC_DIRECTIONS = {
 def motor_kontrol_dongusu():
     global sistem_aktif, hedef_acisi, gorsel_kilit, takip_hatasi_x, takip_hatasi_y
     
-    mevcut_aci = 0
-    print("[MOTOR] 360 Derece Tarama Motoru (MG995 360 Servo) Başlatıldı.")
+    # 45 saniyede 1 tur atan Pan motor hızı (Kalibrasyon değeri: 0.05)
+    SWEEP_SPEED = 0.05 
     
-    # Başlangıç pozisyonları
+    print("[MOTOR] 360 Derece Tarama Motoru (Pan) ve 180 Derece Tilt Motoru Başlatıldı.")
+    
     if GPIO_AVAILABLE:
-        pan_servo.value = 0.0  # 360 servoyu durdur
-        tilt_servo.value = 0.0 # 180 servoyu ufuk çizgisine (ortaya) al
+        pan_servo.value = 0.0
+        tilt_servo.value = 0.0 
     
     while sistem_aktif:
         if gorsel_kilit:
-            # GÖRSEL TAKİP (Dinamik Hedef İzleme)
-            if abs(takip_hatasi_x) > 30:
-                if GPIO_AVAILABLE:
-                    # Hedef sağdaysa sağa yavaş dön (0.15), soldaysa sola yavaş dön (-0.15)
+            # GÖRSEL TAKİP
+            if GPIO_AVAILABLE:
+                # Pan Takip (Sağ/Sol)
+                if abs(takip_hatasi_x) > 30:
                     hiz = 0.15 if takip_hatasi_x > 0 else -0.15
                     pan_servo.value = hiz
-            else:
-                # Hedef X merkezindeyse dur
-                if GPIO_AVAILABLE: pan_servo.value = 0.0
-                
-            if abs(takip_hatasi_y) > 30:
-                if GPIO_AVAILABLE:
-                    # Servo değerini -1.0 ile 1.0 arasında yumuşakça değiştir
+                else:
+                    pan_servo.value = 0.0
+                    
+                # Tilt Takip (Yukarı/Aşağı)
+                if abs(takip_hatasi_y) > 30:
                     mevcut_tilt = tilt_servo.value
                     düzeltme = -0.02 if takip_hatasi_y > 0 else 0.02
-                    yeni_tilt = max(min(mevcut_tilt + düzeltme, 1.0), -1.0)
-                    tilt_servo.value = yeni_tilt
+                    tilt_servo.value = max(min(mevcut_tilt + düzeltme, 1.0), -1.0)
                 
             time.sleep(0.02)
             continue
             
+        # Görsel kilit yoksa ve tehdit yoksa, Tilt motoru daima sabit durur (Ufuk çizgisi)
+        if GPIO_AVAILABLE and tilt_servo.value != 0.0:
+            tilt_servo.value = 0.0
+            
         if hedef_acisi is None:
-            # 360 Derece Sürekli Tarama (Yavaşça dön)
+            # 360 Derece Sürekli Tarama (Sürekli dön)
             if GPIO_AVAILABLE:
-                pan_servo.value = 0.1 # Yavaş dönüş hızı
-            mevcut_aci = (mevcut_aci + 1) % 360
+                pan_servo.value = SWEEP_SPEED
             time.sleep(0.05)
         else:
-            print(f"[MOTOR] Akustik Tehdit! Hedefe yöneliniyor...")
-            # Ses yönüne dönüş simülasyonu (360 servolar açı bilmez, zamanla dönülür)
+            # Ses yönüne dön!
+            print(f"[MOTOR] Akustik Tehdit! {hedef_acisi} derecesine yöneliniyor...")
             if GPIO_AVAILABLE:
-                pan_servo.value = 0.4 # Daha hızlı dönüş
-            time.sleep(1) # Dönüş süresi (Mekaniğe göre kalibre edilecek)
+                pan_servo.value = 0.4 # Tehdite doğru hızlı dönüş
+            time.sleep(1) # Dönüş süresi kalibrasyonu
             if GPIO_AVAILABLE:
-                pan_servo.value = 0.0 # Dur
-            hedef_acisi = None # Görsel kilit için bekle
+                pan_servo.value = 0.0 # Dur ve kameranın (YOLO'nun) tespit etmesini bekle
+            hedef_acisi = None 
 
 # ====================================================================
-# 2. AKUSTİK İŞLEME MODÜLÜ (4 KANALLI MİKROFON)
+# 2. AKUSTİK İŞLEME MODÜLÜ (SES MODELİ İLE STEREO DİNLEME)
 # ====================================================================
-def extract_features(y, sr):
-    try:
-        mfcc = librosa.feature.mfcc(y=y, sr=sr, n_mfcc=13)
-        mfcc_mean = np.mean(mfcc, axis=1)
-        chroma = librosa.feature.chroma_stft(y=y, sr=sr)
-        chroma_mean = np.mean(chroma, axis=1)
-        mel_spectrogram = librosa.feature.melspectrogram(y=y, sr=sr)
-        mel_mean = np.mean(mel_spectrogram, axis=1)
-        spectral_contrast = librosa.feature.spectral_contrast(y=y, sr=sr)
-        contrast_mean = np.mean(spectral_contrast, axis=1)
-        return np.hstack((mfcc_mean, chroma_mean, mel_mean, contrast_mean))
-    except Exception as e:
-        return None
-
-def audio_listener(clf):
-    global sistem_aktif, hedef_acisi, gorsel_kilit
-    print("[AKUSTİK] 4x INMP441 Mikrofon Dinleme Aktif.")
+def audio_listener():
+    global sistem_aktif, hedef_acisi, gorsel_kilit, ses_modeli
     
-    def audio_callback(indata, frames, time_info, status):
-        if not sistem_aktif or gorsel_kilit:
-            return 
-            
-        kanal_sayisi = indata.shape[1] if indata.shape[1] > 1 else 4
-        en_yuksek_guven_skoru = 0
-        hedef_kanal = -1
+    print("[AKUSTİK] Ses Modeli ile Stereo Dinleme Başlatılıyor...")
+    
+    if ses_modeli is None:
+        print("[UYARI] Ses modeli bulunamadı! Akustik tespit devre dışı.")
+        return
+    
+    # Ses kayıt parametreleri
+    SAMPLE_RATE = 44100
+    DURATION = 1.0  # 1 saniyelik kayıt
+    BUFFER_SIZE = int(SAMPLE_RATE * DURATION)
+    
+    def extract_features(audio_data):
+        """Ses verisinden özellik çıkarımı."""
+        # MFCC özelliklerini çıkar
+        mfccs = librosa.feature.mfcc(y=audio_data, sr=SAMPLE_RATE, n_mfcc=13)
+        mfccs_mean = np.mean(mfccs, axis=1)
         
-        for kanal_id in range(min(4, kanal_sayisi)):
-            audio_data = indata[:, kanal_id] if indata.shape[1] > kanal_id else indata[:, 0]
-            features = extract_features(audio_data, SAMPLE_RATE)
+        # Spektral centroid
+        spectral_centroid = librosa.feature.spectral_centroid(y=audio_data, sr=SAMPLE_RATE)[0]
+        spectral_centroid_mean = np.mean(spectral_centroid)
+        
+        # RMS enerji
+        rms = librosa.feature.rms(y=audio_data)[0]
+        rms_mean = np.mean(rms)
+        
+        # Zero crossing rate
+        zcr = librosa.feature.zero_crossing_rate(y=audio_data)[0]
+        zcr_mean = np.mean(zcr)
+        
+        # Özellikleri birleştir
+        features = np.concatenate([
+            mfccs_mean,
+            [spectral_centroid_mean, rms_mean, zcr_mean]
+        ])
+        
+        return features
+    
+    while sistem_aktif:
+        if gorsel_kilit:
+            time.sleep(0.5)  # Görsel kilit varsa sesi dinlemeye gerek yok
+            continue
+        
+        try:
+            # Stereo kayıt (2 kanal)
+            recording = sd.rec(int(BUFFER_SIZE), samplerate=SAMPLE_RATE, channels=2, dtype='float32')
+            sd.wait()
             
-            if features is not None:
-                features = features.reshape(1, -1)
-                if hasattr(clf, "predict_proba"):
-                    probs = clf.predict_proba(features)
-                    drone_prob = probs[0][1]
-                    if drone_prob > 0.6 and drone_prob > en_yuksek_guven_skoru:
-                        en_yuksek_guven_skoru = drone_prob
-                        hedef_kanal = kanal_id
-                else:
-                    prediction = clf.predict(features)
-                    if prediction[0] == 1:
-                        hedef_kanal = kanal_id
-                        break 
-
-        if hedef_kanal != -1:
-            yon = MIC_DIRECTIONS.get(hedef_kanal, {"isim": "BİLİNMEYEN", "aci": 0})
-            print(f"\n🔊 [ALARM] {yon['isim']} yönünden Drone sesi alındı! (Güven: {en_yuksek_guven_skoru:.2f})")
-            hedef_acisi = yon["aci"]
-
-    try:
-        with sd.InputStream(samplerate=SAMPLE_RATE, channels=1, dtype='float32', 
-                            blocksize=int(SAMPLE_RATE * DURATION), callback=audio_callback):
-            while sistem_aktif:
-                time.sleep(0.5)
-    except Exception as e:
-        print(f"[HATA] Mikrofon başlatılamadı: {e}")
+            # Sol ve sağ kanalları ayır
+            left_channel = recording[:, 0]
+            right_channel = recording[:, 1]
+            
+            # Her kanal için özellik çıkar ve tahmin yap
+            left_features = extract_features(left_channel).reshape(1, -1)
+            right_features = extract_features(right_channel).reshape(1, -1)
+            
+            left_prediction = ses_modeli.predict(left_features)[0]
+            right_prediction = ses_modeli.predict(right_features)[0]
+            
+            # Drone tespit kontrolü
+            if left_prediction == 1:  # Sol tarafta drone
+                hedef_acisi = 270  # Batı (sol)
+                print(f"[AKUSTİK] 🎯 Sol Tarafta Drone Tespit Edildi! Yön: {hedef_acisi} Derece")
+            elif right_prediction == 1:  # Sağ tarafta drone
+                hedef_acisi = 90  # Doğu (sağ)
+                print(f"[AKUSTİK] 🎯 Sağ Tarafta Drone Tespit Edildi! Yön: {hedef_acisi} Derece")
+            
+        except Exception as e:
+            print(f"[HATA] Ses işleme hatası: {e}")
+            time.sleep(1)
+        
+        time.sleep(0.1)  # Kısa bekleme
 
 # ====================================================================
 # 3. GÖRSEL İŞLEME VE ATEŞLEME MODÜLÜ (ANA DÖNGÜ)
@@ -350,18 +371,7 @@ def hibrit_sistem_baslat():
     
     print("\n[BİLGİ] Otonom Şahingözü Sistemi Yükleniyor (Raspberry Pi 5 Optimizasyonu)...")
     
-    # 1. Modelleri Yükle (Geliştirilmiş Hata Yönetimi)
-    try:
-        if os.path.exists(AUDIO_MODEL_PATH):
-            audio_clf = joblib.load(AUDIO_MODEL_PATH)
-        else:
-            print(f"[UYARI] Ses modeli bulunamadı. Beklenen yol: {AUDIO_MODEL_PATH}")
-            print("[UYARI] Akustik tarama devre dışı bırakıldı.")
-            audio_clf = None
-    except Exception as e:
-        print(f"[KRİTİK HATA] Ses modeli yüklenirken hata oluştu: {e}")
-        audio_clf = None
-
+    # 1. Modelleri Yükle
     try:
         if not os.path.exists(YOLO_MODEL_PATH):
             print(f"[UYARI] Görüntü modeli bulunamadı! Beklenen tam yol: {YOLO_MODEL_PATH}")
@@ -371,14 +381,26 @@ def hibrit_sistem_baslat():
     except Exception as e:
         print(f"[UYARI] YOLO modeli başlatılamadı: {e}. Görsel takip devre dışı.")
         yolo_model = None
+    
+    # Ses modelini yükle
+    global ses_modeli
+    try:
+        if not os.path.exists(SES_MODEL_PATH):
+            print(f"[UYARI] Ses modeli bulunamadı! Beklenen tam yol: {SES_MODEL_PATH}")
+            ses_modeli = None
+        else:
+            ses_modeli = joblib.load(SES_MODEL_PATH)
+            print("[BİLGİ] Ses modeli başarıyla yüklendi.")
+    except Exception as e:
+        print(f"[UYARI] Ses modeli yüklenemedi: {e}. Akustik tespit devre dışı.")
+        ses_modeli = None
 
     # 2. Arka Plan Thread'lerini Başlat
     motor_thread = threading.Thread(target=motor_kontrol_dongusu, daemon=True)
     motor_thread.start()
 
-    if audio_clf is not None:
-        audio_thread = threading.Thread(target=audio_listener, args=(audio_clf,), daemon=True)
-        audio_thread.start()
+    audio_thread = threading.Thread(target=audio_listener, daemon=True)
+    audio_thread.start()
 
     if yolo_model is not None:
         print("[BİLGİ] Yapay Zeka (YOLO) Çekirdeği Asenkron Olarak Başlatılıyor...")
