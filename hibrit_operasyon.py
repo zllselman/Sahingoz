@@ -199,12 +199,13 @@ def audio_listener():
         return
 
     try:
-        sd.default.device = (audio_device, None)
+        sd.default.device = audio_device
     except Exception as e:
         print(f"[UYARI] Ses cihazı atanamadı: {e}")
         return
 
     available_rates = [44100, 48000, 32000, 22050, 16000]
+    print(f"[AKUSTİK] Denenecek sample rate listesi: {available_rates}")
     SAMPLE_RATE = None
     for rate in available_rates:
         try:
@@ -255,7 +256,7 @@ def audio_listener():
         
         try:
             # Stereo kayıt (2 kanal)
-            recording = sd.rec(int(BUFFER_SIZE), samplerate=SAMPLE_RATE, channels=2, dtype='float32')
+            recording = sd.rec(int(BUFFER_SIZE), samplerate=SAMPLE_RATE, channels=2, dtype='float32', device=audio_device)
             sd.wait()
             
             # Sol ve sağ kanalları ayır
