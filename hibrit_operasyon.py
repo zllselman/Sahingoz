@@ -123,71 +123,71 @@ MIC_DIRECTIONS = {
 def motor_kontrol_dongusu():
     global sistem_aktif, hedef_acisi, gorsel_kilit, takip_hatasi_x, takip_hatasi_y
     
-    # Tarama sırasında sağa/sola ilerleyen Pan motor hızı
-    SWEEP_SPEED = 0.12
-    SCAN_INTERVAL = PAN_SCAN_INTERVAL  # Pan tarama aralığı (saniye)
-    scan_direction = 1
-    last_scan_change = time.time()
-    
+    # Tarama parametreleri: 120 derece'ye yakın tarama için servo değer aralığı
+    PAN_LEFT = -0.6
+    PAN_RIGHT = 0.6
+    PAN_CENTER = 0.0
+    SWEEP_HOLD = PAN_SCAN_INTERVAL  # saniye, ortam değişkeni ile ayarlanabilir
+
     # Tilt motor sınırları: 45 derece (0.5) ile 90 derece (1.0) arasında
     MIN_TILT = 45 / 90.0   # 0.5
     MAX_TILT = 90 / 90.0   # 1.0
-    
-    print("[MOTOR] 120 Derece Tarama Motoru (Pan) ve 180 Derece Tilt Motoru Başlatıldı.")
-    
+
+    print("[MOTOR] Başlatılıyor: Pan=120° tarama, Tilt sabit bekleme (tehditte hareket)")
+
+    current_pan = PAN_CENTER
+    pan_target = PAN_RIGHT
+    last_sweep_change = time.time()
+
     if GPIO_AVAILABLE:
-        pan_servo.value = 0.0
-        tilt_servo.value = MIN_TILT  # Başlangıç pozisyonu: 45 derece
-    
+        pan_servo.value = PAN_CENTER
+        tilt_servo.value = MIN_TILT
+
     while sistem_aktif:
+        # Eğer görsel kilit varsa, görsel takip kontrolü devreye girer
         if gorsel_kilit:
-            # GÖRSEL TAKİP
             if GPIO_AVAILABLE:
-                # Pan Takip (Sağ/Sol)
+                # PAN takip: sadece gerektiğinde güncelle (hız/işaret)
                 if abs(takip_hatasi_x) > 30:
                     hiz = 0.15 if takip_hatasi_x > 0 else -0.15
-                    pan_servo.value = hiz
-                    print(f"[MOTOR-DBG] pan_servo set to {hiz}")
+                    if abs((pan_servo.value or 0) - hiz) > 0.05:
+                        pan_servo.value = hiz
+                        print(f"[MOTOR-DBG] pan_servo set to {hiz} (tracking)")
                 else:
-                    pan_servo.value = 0.0
-                    print(f"[MOTOR-DBG] pan_servo set to 0.0 (center)")
-                    
-                # Tilt Takip (Yukarı/Aşağı) - 45-75 derece arasında sınırlı
+                    if abs((pan_servo.value or 0) - PAN_CENTER) > 0.05:
+                        pan_servo.value = PAN_CENTER
+                        print("[MOTOR-DBG] pan_servo centered (tracking)")
+
+                # TILT sadece takip esnasında küçük ayarlar yapar; aksi halde sabit bekler
                 if abs(takip_hatasi_y) > 30:
-                    mevcut_tilt = tilt_servo.value
+                    mevcut_tilt = tilt_servo.value or MIN_TILT
                     düzeltme = -0.02 if takip_hatasi_y > 0 else 0.02
                     yeni_tilt = max(min(mevcut_tilt + düzeltme, MAX_TILT), MIN_TILT)
-                    tilt_servo.value = yeni_tilt
-                    print(f"[MOTOR-DBG] tilt_servo adjusted to {yeni_tilt}")
-                
+                    if abs(mevcut_tilt - yeni_tilt) > 0.01:
+                        tilt_servo.value = yeni_tilt
+                        print(f"[MOTOR-DBG] tilt_servo adjusted to {yeni_tilt} (tracking)")
+
             time.sleep(0.02)
             continue
-            
-        # Görsel kilit yoksa ve tehdit yoksa, Tilt motoru sabit durur (45 derece)
-        if GPIO_AVAILABLE and tilt_servo.value != MIN_TILT:
-            tilt_servo.value = MIN_TILT
-            
-        if hedef_acisi is None:
-            # 180 Derece Yatay Tarama: belli süre sağa döndükten sonra sola döner
-            if GPIO_AVAILABLE:
-                value = SWEEP_SPEED * scan_direction
-                pan_servo.value = value
-                print(f"[MOTOR-DBG] sweep pan_servo set to {value}")
-            if time.time() - last_scan_change > SCAN_INTERVAL:
-                scan_direction *= -1
-                last_scan_change = time.time()
-            time.sleep(0.05)
-        else:
-            # Ses yönüne dön!
-            print(f"[MOTOR] Akustik Tehdit! {hedef_acisi} derecesine yöneliniyor...")
-            if GPIO_AVAILABLE:
-                pan_servo.value = 0.4 # Tehdite doğru hızlı dönüş
-                print("[MOTOR-DBG] pan_servo set to 0.4 (acoustic threat)")
-            time.sleep(1) # Dönüş süresi kalibrasyonu
-            if GPIO_AVAILABLE:
-                pan_servo.value = 0.0 # Dur ve kameranın (YOLO'nun) tespit etmesini bekle
-                print("[MOTOR-DBG] pan_servo set to 0.0 (stop)")
-            hedef_acisi = None
+
+        # Görsel kilit yoksa: Tilt sabit bekler, Pan tarama modunda çalışır
+        if GPIO_AVAILABLE:
+            # Tilt'i yalnızca gerektiğinde MIN_TILT'e geri al
+            if abs((tilt_servo.value or 0) - MIN_TILT) > 0.01:
+                tilt_servo.value = MIN_TILT
+                print(f"[MOTOR-DBG] tilt_servo set to MIN_TILT ({MIN_TILT})")
+
+            # Pan tarama: hedefe doğru at ve belirli aralıkla yön değiştir
+            if abs((pan_servo.value or 0) - pan_target) > 0.05:
+                pan_servo.value = pan_target
+                print(f"[MOTOR-DBG] sweep pan_servo moving to {pan_target}")
+
+            if time.time() - last_sweep_change > SWEEP_HOLD:
+                # swap target between left and right
+                pan_target = PAN_LEFT if pan_target == PAN_RIGHT else PAN_RIGHT
+                last_sweep_change = time.time()
+
+        time.sleep(0.05)
 
 # ====================================================================
 # 2. AKUSTİK İŞLEME MODÜLÜ (SES MODELİ İLE STEREO DİNLEME)

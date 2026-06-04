@@ -1,0 +1,14 @@
+[Unit]
+Description=Desktop Sahingoz Autostart
+After=network.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/Desktop/Sahingoz
+ExecStart=/usr/bin/python3 /home/pi/Desktop/Sahingoz/baslat.py
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
