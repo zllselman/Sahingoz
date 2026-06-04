@@ -95,7 +95,7 @@ else:
 # GLOBAL DEĞİŞKENLER VE HABERLEŞME
 # ====================================================================
 sistem_aktif = True
-hedef_acisi = None    # None ise motor 360 döner, sayı ise o açıya döner
+hedef_acisi = None    # None ise motor tarama modunda, sayı ise o açıya dönmeye çalışır
 gorsel_kilit = False  # Kameranın hedefe kilitlenme durumu
 takip_hatasi_x = 0    # Yatay (Pan) takip hatası (Piksel)
 takip_hatasi_y = 0    # Dikey (Tilt) takip hatası (Piksel)
@@ -119,18 +119,21 @@ MIC_DIRECTIONS = {
 def motor_kontrol_dongusu():
     global sistem_aktif, hedef_acisi, gorsel_kilit, takip_hatasi_x, takip_hatasi_y
     
-    # 45 saniyede 1 tur atan Pan motor hızı (Kalibrasyon değeri: 0.05)
-    SWEEP_SPEED = 0.05
+    # Tarama sırasında sağa/sola ilerleyen Pan motor hızı
+    SWEEP_SPEED = 0.12
+    SCAN_INTERVAL = 3.0  # Her 3 saniyede bir yön değiştirerek yaklaşık 180° tarama
+    scan_direction = 1
+    last_scan_change = time.time()
     
     # Tilt motor sınırları: 45 derece (0.5) ile 90 derece (1.0) arasında
     MIN_TILT = 45 / 90.0   # 0.5
     MAX_TILT = 90 / 90.0   # 1.0
     
-    print("[MOTOR] 360 Derece Tarama Motoru (Pan) ve 180 Derece Tilt Motoru Başlatıldı.")
+    print("[MOTOR] 180 Derece Tarama Motoru (Pan) ve 180 Derece Tilt Motoru Başlatıldı.")
     
     if GPIO_AVAILABLE:
         pan_servo.value = 0.0
-        tilt_servo.value = MIN_TILT  # Başlangış pozisyonu: 45 derece
+        tilt_servo.value = MIN_TILT  # Başlangıç pozisyonu: 45 derece
     
     while sistem_aktif:
         if gorsel_kilit:
@@ -157,9 +160,12 @@ def motor_kontrol_dongusu():
             tilt_servo.value = MIN_TILT
             
         if hedef_acisi is None:
-            # 360 Derece Sürekli Tarama (Sürekli dön)
+            # 180 Derece Yatay Tarama: belli süre sağa döndükten sonra sola döner
             if GPIO_AVAILABLE:
-                pan_servo.value = SWEEP_SPEED
+                pan_servo.value = SWEEP_SPEED * scan_direction
+            if time.time() - last_scan_change > SCAN_INTERVAL:
+                scan_direction *= -1
+                last_scan_change = time.time()
             time.sleep(0.05)
         else:
             # Ses yönüne dön!
@@ -606,7 +612,7 @@ def hibrit_sistem_baslat():
                     if hedef_acisi is not None:
                         ses_bekleme_sayaci += 1
                         if ses_bekleme_sayaci > SES_BEKLEME_MAX:
-                            print("[BİLGİ] Ses yönünde hedef bulunamadı. 360 taramaya devam ediliyor.")
+                            print("[BİLGİ] Ses yönünde hedef bulunamadı. Tarama moduna dönülüyor.")
                             hedef_acisi = None
                             ses_bekleme_sayaci = 0
 
