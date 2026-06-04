@@ -121,7 +121,7 @@ def motor_kontrol_dongusu():
     
     # Tarama sırasında sağa/sola ilerleyen Pan motor hızı
     SWEEP_SPEED = 0.12
-    SCAN_INTERVAL = 3.0  # Her 3 saniyede bir yön değiştirerek yaklaşık 180° tarama
+    SCAN_INTERVAL = 2.0  # Her 2 saniyede bir yön değiştirerek yaklaşık 120° tarama
     scan_direction = 1
     last_scan_change = time.time()
     
@@ -129,7 +129,7 @@ def motor_kontrol_dongusu():
     MIN_TILT = 45 / 90.0   # 0.5
     MAX_TILT = 90 / 90.0   # 1.0
     
-    print("[MOTOR] 180 Derece Tarama Motoru (Pan) ve 180 Derece Tilt Motoru Başlatıldı.")
+    print("[MOTOR] 120 Derece Tarama Motoru (Pan) ve 180 Derece Tilt Motoru Başlatıldı.")
     
     if GPIO_AVAILABLE:
         pan_servo.value = 0.0

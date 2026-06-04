@@ -20,17 +20,14 @@ Kuleniz 3 kattan oluşur:
 
 ## 🔌 BÖLÜM 2: Güç (Elektrik) Bağlantıları
 
-> **DİKKAT:** Raspberry Pi 5 çok hassastır. Bataryayı doğrudan Pi'ye **ASLA** bağlamayın, anında yanar. Araya LM2596 Voltaj Regülatörü koyacağız.
+> **DİKKAT:** Raspberry Pi 5 hassastır. Bu sürümde LM2596 veya benzeri bir regülatör kullanmayacağız; motorlar ve Raspberry Pi ayrı güç kaynaklarıyla beslenecektir.
 
-1. **Batarya -> Regülatör (LM2596):** 
-   Bataryanızın Kırmızı (+) ve Siyah (-) kablolarını alın. LM2596 kartının `IN+` ve `IN-` yazan yerlerine lehimleyin veya vidalayın.
-2. **Regülatörü Ayarlama:** 
-   LM2596'nın üstündeki küçük sarı vidayı bir tornavida ile çevirin. Bir multimetre (voltmetre) ile çıkış (`OUT+` ve `OUT-`) voltajını ölçün. Ekranda tam olarak **5.1V** (5.1 Volt) görene kadar vidayı çevirin.
-3. **Regülatör -> Slip Ring -> Raspberry Pi:**
-   - LM2596'dan çıkan `OUT+` (5.1V) kablosunu Slip Ring'in bir kablosuna (örneğin kırmızı) bağlayın.
-   - LM2596'dan çıkan `OUT-` (GND) kablosunu Slip Ring'in diğer kablosuna (örneğin siyah) bağlayın.
-   - Slip Ring'in dönen üst kısmından çıkan o kırmızı kabloyu Raspberry Pi'nin **Pin 2 (5V)** veya **Pin 4 (5V)** ayağına bağlayın. Siyah kabloyu ise **Pin 6 (GND)** ayağına bağlayın.
-   *(Artık Pi 5, kule dönerken bile elektrik alabilecek!)*
+1. **Güç Kaynakları:**
+   - Motorlar için yüksek akım verebilen bir 5V batarya/psu kullanın. Motorların kırmızı (VCC) kablolarını bu 5V pozitifine bağlayın.
+   - Motorların kahverengi (GND) kablolarını batarya/psu negatifine bağlayın.
+   - Raspberry Pi'yi kendi 5V beslemesiyle çalıştırın.
+   - MUTLAKA ortak toprak (COMMON GND) oluşturun: batarya/psu negatifini Raspberry Pi'nin herhangi bir GND pinine bağlayın.
+   - Kablo kesitlerinin motorların çektiği akımı taşıyabildiğinden emin olun.
 
 ---
 
@@ -51,16 +48,16 @@ Elinizde 2 çeşit MG995 var:
 
 İki motorun da 3 kablosu vardır: **Kırmızı (Güç)**, **Kahverengi (GND/Toprak)**, **Turuncu/Sarı (Sinyal)**.
 
-> **UYARI:** Motorların Kırmızı kablolarını asla Raspberry Pi'nin üzerinden almayın. Çok akım çeker ve Pi'yi kapatır. Motorların kırmızı kablolarını doğrudan LM2596 Regülatörün 5V çıkışına bağlayın.
+> **UYARI:** Motorların Kırmızı kablolarını asla Raspberry Pi'nin 5V pinlerinden almayın. Motorlar yüksek akım çeker; onları yeterli akım sağlayan ayrı bir güç kaynağına bağlayın ve Pi ile ortak toprak sağlayın.
 
-**Pan Motoru (360° - Taret Dönüşü):**
-1. **Kırmızı Kablo:** LM2596'nın 5V (OUT+) çıkışına.
-2. **Kahverengi Kablo:** LM2596'nın GND (OUT-) çıkışına **VE** Raspberry Pi'nin herhangi bir GND pinine (Örn: Pin 14). *(Buna ortak toprak denir, şarttır!)*
+**Pan Motoru (Taret Dönüşü, ~120° Tarama):**
+1. **Kırmızı Kablo:** Motorların kırmızı (VCC) kablolarını ayrı 5V batarya/psu pozitifine bağlayın (Pi'nin 5V pinini kullanmayın).
+2. **Kahverengi Kablo:** Motorların kahverengi (GND) kablolarını batarya/psu negatifine bağlayın ve bu negatif hattı Raspberry Pi'nin herhangi bir GND pinine bağlayarak ortak toprak oluşturun.
 3. **Turuncu Kablo (Sinyal):** Raspberry Pi'nin **Pin 32 (GPIO 12)** ayağına.
 
 **Tilt Motoru (180° - Kamera Kafası):**
-1. **Kırmızı Kablo:** LM2596'nın 5V (OUT+) çıkışına.
-2. **Kahverengi Kablo:** Ortağa (GND).
+1. **Kırmızı Kablo:** Motorun kırmızı (VCC) kablosunu ayrı 5V batarya/psu pozitifine bağlayın.
+2. **Kahverengi Kablo:** Motorun kahverengi (GND) kablosunu batarya/psu negatifine bağlayın (ortak toprak ile Raspberry Pi).
 3. **Turuncu Kablo (Sinyal):** Raspberry Pi'nin **Pin 33 (GPIO 13)** ayağına.
 
 ---
