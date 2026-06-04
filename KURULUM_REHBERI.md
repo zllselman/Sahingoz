@@ -56,7 +56,7 @@ Elinizde 2 çeşit MG995 var:
 **Pan Motoru (360° - Taret Dönüşü):**
 1. **Kırmızı Kablo:** LM2596'nın 5V (OUT+) çıkışına.
 2. **Kahverengi Kablo:** LM2596'nın GND (OUT-) çıkışına **VE** Raspberry Pi'nin herhangi bir GND pinine (Örn: Pin 14). *(Buna ortak toprak denir, şarttır!)*
-3. **Turuncu Kablo (Sinyal):** Raspberry Pi'nin **Pin 11 (GPIO 17)** ayağına.
+3. **Turuncu Kablo (Sinyal):** Raspberry Pi'nin **Pin 32 (GPIO 12)** ayağına.
 
 **Tilt Motoru (180° - Kamera Kafası):**
 1. **Kırmızı Kablo:** LM2596'nın 5V (OUT+) çıkışına.

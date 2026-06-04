@@ -55,13 +55,26 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 YOLO_MODEL_PATH = os.path.join(BASE_DIR, "best.pt")
 SES_MODEL_PATH = os.path.join(BASE_DIR, "drone_audio_model.joblib")
 
-# Headless kontrolü: Ortam değişkenlerinde DISPLAY var mı?
-try:
-    import socket
-    socket.create_connection(('localhost', 6000), timeout=1)
-    DISPLAY_AVAILABLE = True
-except (OSError, socket.error, socket.timeout):
-    DISPLAY_AVAILABLE = 'DISPLAY' in os.environ or 'WAYLAND_DISPLAY' in os.environ
+def detect_display_available():
+    """Ekran üzerinde GUI görüntüsü gösterilip gösterilemeyeceğini tespit eder."""
+    if 'DISPLAY' in os.environ or 'WAYLAND_DISPLAY' in os.environ:
+        return True
+    if sys.platform.startswith('linux'):
+        drm_path = '/sys/class/drm/'
+        try:
+            if os.path.exists(drm_path):
+                for folder in os.listdir(drm_path):
+                    if 'HDMI' in folder or 'DP' in folder or 'video' in folder:
+                        status_file = os.path.join(drm_path, folder, 'status')
+                        if os.path.exists(status_file):
+                            with open(status_file, 'r') as f:
+                                if f.read().strip().lower() == 'connected':
+                                    return True
+        except Exception:
+            pass
+    return False
+
+DISPLAY_AVAILABLE = detect_display_available()
 
 # ====================================================================
 # DONANIM (GPIO) PİN TANIMLAMALARI (Raspberry Pi 5)
@@ -456,7 +469,7 @@ def get_libcamera_pipeline():
     )
 
 def hibrit_sistem_baslat():
-    global sistem_aktif, hedef_acisi, gorsel_kilit
+    global sistem_aktif, hedef_acisi, gorsel_kilit, DISPLAY_AVAILABLE
     
     print("\n[BİLGİ] Otonom Şahingözü Sistemi Yükleniyor (Raspberry Pi 5 Optimizasyonu)...")
     
@@ -470,33 +483,8 @@ def hibrit_sistem_baslat():
     except Exception as e:
         print(f"[UYARI] YOLO modeli başlatılamadı: {e}. Görsel takip devre dışı.")
         yolo_model = None
-    
-    # Ses modelini yükle
-    global ses_modeli
-    try:
-        if not os.path.exists(SES_MODEL_PATH):
-            print(f"[UYARI] Ses modeli bulunamadı! Beklenen tam yol: {SES_MODEL_PATH}")
-            ses_modeli = None
-        else:
-            ses_modeli = joblib.load(SES_MODEL_PATH)
-            print("[BİLGİ] Ses modeli başarıyla yüklendi.")
-    except Exception as e:
-        print(f"[UYARI] Ses modeli yüklenemedi: {e}. Akustik tespit devre dışı.")
-        ses_modeli = None
 
-    # 2. Arka Plan Thread'lerini Başlat
-    motor_thread = threading.Thread(target=motor_kontrol_dongusu, daemon=True)
-    motor_thread.start()
-
-    audio_thread = threading.Thread(target=audio_listener, daemon=True)
-    audio_thread.start()
-
-    if yolo_model is not None:
-        print("[BİLGİ] Yapay Zeka (YOLO) Çekirdeği Asenkron Olarak Başlatılıyor...")
-        yolo_thread = threading.Thread(target=yolo_worker_dongusu, args=(yolo_model,), daemon=True)
-        yolo_thread.start()
-
-    # 3. Kamera Başlat
+    # 2. Kamera Başlat
     try:
         print("[KONTROL] Standart OpenCV V4L2 kamerası deneniyor...")
         cap = cv2.VideoCapture(0)
@@ -529,15 +517,49 @@ def hibrit_sistem_baslat():
             
         print("[BİLGİ] Asenkron Kamera Okuyucu (Anti-Lag Thread) başlatılıyor...")
         cap = ThreadedCamera(cap)
-        
+
+        if DISPLAY_AVAILABLE:
+            try:
+                cv2.namedWindow("SAHINGOZ - Otonom Sistem", cv2.WINDOW_NORMAL)
+            except cv2.error:
+                DISPLAY_AVAILABLE = False
+                print("[UYARI] Ekran penceresi açılamıyor, headless moda geçiliyor.")
+
     except Exception as e:
         print(f"[KRİTİK HATA] Kamera başlatma hatası: {e}. Sistem kapatılıyor...")
         sys.exit(1)
         
-    ses_bekleme_sayaci = 0
-    SES_BEKLEME_MAX = 30
+    # 3. Ses Modelini Yükle ve Mikrofonu Aktif Et
+    global ses_modeli
+    try:
+        if not os.path.exists(SES_MODEL_PATH):
+            print(f"[UYARI] Ses modeli bulunamadı! Beklenen tam yol: {SES_MODEL_PATH}")
+            ses_modeli = None
+        else:
+            ses_modeli = joblib.load(SES_MODEL_PATH)
+            print("[BİLGİ] Ses modeli başarıyla yüklendi.")
+    except Exception as e:
+        print(f"[UYARI] Ses modeli yüklenemedi: {e}. Akustik tespit devre dışı.")
+        ses_modeli = None
+
+    audio_thread = threading.Thread(target=audio_listener, daemon=True)
+    audio_thread.start()
+
+    # 4. Motorları Başlat
+    motor_thread = threading.Thread(target=motor_kontrol_dongusu, daemon=True)
+    motor_thread.start()
+
+    if yolo_model is not None:
+        print("[BİLGİ] Yapay Zeka (YOLO) Çekirdeği Asenkron Olarak Başlatılıyor...")
+        yolo_thread = threading.Thread(target=yolo_worker_dongusu, args=(yolo_model,), daemon=True)
+        yolo_thread.start()
+
+    time.sleep(0.05)
 
     print("[BİLGİ] 🎥 Sistem Hazır. Çevre taranıyor... (Kapatmak için CTRL+C)")
+
+    ses_bekleme_sayaci = 0
+    SES_BEKLEME_MAX = 30
 
     try:
         while sistem_aktif:
