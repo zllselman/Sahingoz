@@ -147,14 +147,18 @@ def motor_kontrol_dongusu():
                 if abs(takip_hatasi_x) > 30:
                     hiz = 0.15 if takip_hatasi_x > 0 else -0.15
                     pan_servo.value = hiz
+                    print(f"[MOTOR-DBG] pan_servo set to {hiz}")
                 else:
                     pan_servo.value = 0.0
+                    print(f"[MOTOR-DBG] pan_servo set to 0.0 (center)")
                     
                 # Tilt Takip (Yukarı/Aşağı) - 45-75 derece arasında sınırlı
                 if abs(takip_hatasi_y) > 30:
                     mevcut_tilt = tilt_servo.value
                     düzeltme = -0.02 if takip_hatasi_y > 0 else 0.02
-                    tilt_servo.value = max(min(mevcut_tilt + düzeltme, MAX_TILT), MIN_TILT)
+                    yeni_tilt = max(min(mevcut_tilt + düzeltme, MAX_TILT), MIN_TILT)
+                    tilt_servo.value = yeni_tilt
+                    print(f"[MOTOR-DBG] tilt_servo adjusted to {yeni_tilt}")
                 
             time.sleep(0.02)
             continue
@@ -166,7 +170,9 @@ def motor_kontrol_dongusu():
         if hedef_acisi is None:
             # 180 Derece Yatay Tarama: belli süre sağa döndükten sonra sola döner
             if GPIO_AVAILABLE:
-                pan_servo.value = SWEEP_SPEED * scan_direction
+                value = SWEEP_SPEED * scan_direction
+                pan_servo.value = value
+                print(f"[MOTOR-DBG] sweep pan_servo set to {value}")
             if time.time() - last_scan_change > SCAN_INTERVAL:
                 scan_direction *= -1
                 last_scan_change = time.time()
@@ -176,168 +182,171 @@ def motor_kontrol_dongusu():
             print(f"[MOTOR] Akustik Tehdit! {hedef_acisi} derecesine yöneliniyor...")
             if GPIO_AVAILABLE:
                 pan_servo.value = 0.4 # Tehdite doğru hızlı dönüş
+                print("[MOTOR-DBG] pan_servo set to 0.4 (acoustic threat)")
             time.sleep(1) # Dönüş süresi kalibrasyonu
             if GPIO_AVAILABLE:
                 pan_servo.value = 0.0 # Dur ve kameranın (YOLO'nun) tespit etmesini bekle
+                print("[MOTOR-DBG] pan_servo set to 0.0 (stop)")
             hedef_acisi = None
 
 # ====================================================================
 # 2. AKUSTİK İŞLEME MODÜLÜ (SES MODELİ İLE STEREO DİNLEME)
+# (Mikrofonlar söküldüğü için bu modül geçici olarak yorum satırına alındı.)
 # ====================================================================
-def list_audio_input_devices():
-    try:
-        devices = sd.query_devices()
-        print("[AKUSTİK] Mevcut ses giriş cihazları taranıyor...")
-        for idx, dev in enumerate(devices):
-            if dev['max_input_channels'] > 0:
-                print(f"  [{idx}] {dev['name']} | input_channels={dev['max_input_channels']} | default_sr={dev['default_samplerate']}")
-        return devices
-    except Exception as e:
-        print(f"[AKUSTİK] Ses cihazları listelenemedi: {e}")
-        return []
-
-
-def select_audio_input_device():
-    devices = list_audio_input_devices()
-    for idx, dev in enumerate(devices):
-        if dev['max_input_channels'] >= 2:
-            print(f"[AKUSTİK] Stereo giriş cihazı seçildi: {dev['name']} (#{idx})")
-            return idx
-    try:
-        default_device = sd.default.device
-        if isinstance(default_device, tuple):
-            return default_device[0]
-        return int(default_device)
-    except Exception:
-        return None
-
-
-def audio_listener():
-    global sistem_aktif, hedef_acisi, gorsel_kilit, ses_modeli
-    
-    print("[AKUSTİK] Ses Modeli ile Stereo Dinleme Başlatılıyor...")
-    
-    if ses_modeli is None:
-        print("[UYARI] Ses modeli bulunamadı! Akustik tespit devre dışı.")
-        return
-    
-    audio_device = select_audio_input_device()
-    if audio_device is None:
-        print("[UYARI] Stereo ses girişi bulunamadı! Akustik tespit devre dışı.")
-        return
-
-    try:
-        sd.default.device = audio_device
-    except Exception as e:
-        print(f"[UYARI] Ses cihazı atanamadı: {e}")
-        return
-
-    available_rates = [44100, 48000, 32000, 22050, 16000]
-    print(f"[AKUSTİK] Denenecek sample rate listesi: {available_rates}")
-    SAMPLE_RATE = None
-    for rate in available_rates:
-        try:
-            sd.check_input_settings(device=audio_device, samplerate=rate, channels=2)
-            SAMPLE_RATE = rate
-            print(f"[AKUSTİK] Kullanılacak sample rate: {SAMPLE_RATE}")
-            break
-        except Exception:
-            continue
-
-    if SAMPLE_RATE is None:
-        print("[UYARI] Uygun sample rate bulunamadı! Akustik tespit devre dışı.")
-        return
-
-    DURATION = 1.0  # 1 saniyelik kayıt
-    BUFFER_SIZE = int(SAMPLE_RATE * DURATION)
-    
-    def extract_features(audio_data):
-        """Ses verisinden özellik çıkarımı (160 feature)."""
-        try:
-            # MFCC özelliklerini çıkar (13 MFCC * 10 frame = 130)
-            mfccs = librosa.feature.mfcc(y=audio_data, sr=SAMPLE_RATE, n_mfcc=13, n_fft=2048, hop_length=512)
-            if mfccs.shape[1] < 10:
-                mfccs = np.pad(mfccs, ((0,0), (0, 10-mfccs.shape[1])), mode='constant')
-            mfccs_flat = mfccs[:, :10].flatten()  # 130 features
-            
-            # Spektral özellikler
-            spectral_centroid = librosa.feature.spectral_centroid(y=audio_data, sr=SAMPLE_RATE)[0][:10]
-            if len(spectral_centroid) < 10:
-                spectral_centroid = np.pad(spectral_centroid, (0, 10-len(spectral_centroid)), mode='constant')
-            
-            # RMS enerji
-            rms = librosa.feature.rms(y=audio_data)[0][:10]
-            if len(rms) < 10:
-                rms = np.pad(rms, (0, 10-len(rms)), mode='constant')
-            
-            # Zero crossing rate
-            zcr = librosa.feature.zero_crossing_rate(y=audio_data)[0][:10]
-            if len(zcr) < 10:
-                zcr = np.pad(zcr, (0, 10-len(zcr)), mode='constant')
-            
-            # Spectral rolloff
-            spectral_rolloff = librosa.feature.spectral_rolloff(y=audio_data, sr=SAMPLE_RATE)[0][:10]
-            if len(spectral_rolloff) < 10:
-                spectral_rolloff = np.pad(spectral_rolloff, (0, 10-len(spectral_rolloff)), mode='constant')
-            
-            # Özellikleri birleştir (130 + 10 + 10 + 10 = 160)
-            features = np.concatenate([
-                mfccs_flat,
-                spectral_centroid,
-                rms,
-                zcr,
-                spectral_rolloff
-            ])
-            
-            return features[:160]  # Tam olarak 160 feature döndür
-        except Exception as e:
-            print(f"[UYARI] Feature çıkarımı hatası: {e}")
-            return np.zeros(160)  # Hata durumunda sıfır vektörü döndür
-    
-    while sistem_aktif:
-        if gorsel_kilit:
-            time.sleep(0.5)  # Görsel kilit varsa sesi dinlemeye gerek yok
-            continue
-        
-        try:
-            # Stereo kayıt (2 kanal)
-            recording = sd.rec(int(BUFFER_SIZE), samplerate=SAMPLE_RATE, channels=2, dtype='float32', device=audio_device)
-            sd.wait()
-            
-            if recording is None or recording.size == 0:
-                print(f"[UYARI] Ses kaydı boş geldi.")
-                time.sleep(0.5)
-                continue
-            
-            # Sol ve sağ kanalları ayır
-            left_channel = recording[:, 0]
-            right_channel = recording[:, 1]
-            
-            # Her kanal için özellik çıkar ve tahmin yap
-            left_features = extract_features(left_channel).reshape(1, -1)
-            right_features = extract_features(right_channel).reshape(1, -1)
-            
-            if left_features.shape[1] != 160 or right_features.shape[1] != 160:
-                print(f"[UYARI] Feature sayısı hatalı: left={left_features.shape[1]}, right={right_features.shape[1]}")
-                time.sleep(0.5)
-                continue
-            
-            left_prediction = ses_modeli.predict(left_features)[0]
-            right_prediction = ses_modeli.predict(right_features)[0]
-            
-            # Drone tespit kontrolü
-            if left_prediction == 1:  # Sol tarafta drone
-                hedef_acisi = 270  # Batı (sol)
-                print(f"[AKUSTİK] 🎯 Sol Tarafta Drone Tespit Edildi! Yön: {hedef_acisi} Derece")
-            elif right_prediction == 1:  # Sağ tarafta drone
-                hedef_acisi = 90  # Doğu (sağ)
-                print(f"[AKUSTİK] 🎯 Sağ Tarafta Drone Tespit Edildi! Yön: {hedef_acisi} Derece")
-            
-        except Exception as e:
-            print(f"[HATA] Ses işleme hatası: {e}")
-            time.sleep(1)
-        
-        time.sleep(0.1)  # Kısa bekleme
+# def list_audio_input_devices():
+#     try:
+#         devices = sd.query_devices()
+#         print("[AKUSTİK] Mevcut ses giriş cihazları taranıyor...")
+#         for idx, dev in enumerate(devices):
+#             if dev['max_input_channels'] > 0:
+#                 print(f"  [{idx}] {dev['name']} | input_channels={dev['max_input_channels']} | default_sr={dev['default_samplerate']}")
+#         return devices
+#     except Exception as e:
+#         print(f"[AKUSTİK] Ses cihazları listelenemedi: {e}")
+#         return []
+#
+#
+# def select_audio_input_device():
+#     devices = list_audio_input_devices()
+#     for idx, dev in enumerate(devices):
+#         if dev['max_input_channels'] >= 2:
+#             print(f"[AKUSTİK] Stereo giriş cihazı seçildi: {dev['name']} (#{idx})")
+#             return idx
+#     try:
+#         default_device = sd.default.device
+#         if isinstance(default_device, tuple):
+#             return default_device[0]
+#         return int(default_device)
+#     except Exception:
+#         return None
+#
+#
+# def audio_listener():
+#     global sistem_aktif, hedef_acisi, gorsel_kilit, ses_modeli
+#     
+#     print("[AKUSTİK] Ses Modeli ile Stereo Dinleme Başlatılıyor...")
+#     
+#     if ses_modeli is None:
+#         print("[UYARI] Ses modeli bulunamadı! Akustik tespit devre dışı.")
+#         return
+#     
+#     audio_device = select_audio_input_device()
+#     if audio_device is None:
+#         print("[UYARI] Stereo ses girişi bulunamadı! Akustik tespit devre dışı.")
+#         return
+#
+#     try:
+#         sd.default.device = audio_device
+#     except Exception as e:
+#         print(f"[UYARI] Ses cihazı atanamadı: {e}")
+#         return
+#
+#     available_rates = [44100, 48000, 32000, 22050, 16000]
+#     print(f"[AKUSTİK] Denenecek sample rate listesi: {available_rates}")
+#     SAMPLE_RATE = None
+#     for rate in available_rates:
+#         try:
+#             sd.check_input_settings(device=audio_device, samplerate=rate, channels=2)
+#             SAMPLE_RATE = rate
+#             print(f"[AKUSTİK] Kullanılacak sample rate: {SAMPLE_RATE}")
+#             break
+#         except Exception:
+#             continue
+#
+#     if SAMPLE_RATE is None:
+#         print("[UYARI] Uygun sample rate bulunamadı! Akustik tespit devre dışı.")
+#         return
+#
+#     DURATION = 1.0  # 1 saniyelik kayıt
+#     BUFFER_SIZE = int(SAMPLE_RATE * DURATION)
+#     
+#     def extract_features(audio_data):
+#         """Ses verisinden özellik çıkarımı (160 feature)."""
+#         try:
+#             # MFCC özelliklerini çıkar (13 MFCC * 10 frame = 130)
+#             mfccs = librosa.feature.mfcc(y=audio_data, sr=SAMPLE_RATE, n_mfcc=13, n_fft=2048, hop_length=512)
+#             if mfccs.shape[1] < 10:
+#                 mfccs = np.pad(mfccs, ((0,0), (0, 10-mfccs.shape[1])), mode='constant')
+#             mfccs_flat = mfccs[:, :10].flatten()  # 130 features
+#             
+#             # Spektral özellikler
+#             spectral_centroid = librosa.feature.spectral_centroid(y=audio_data, sr=SAMPLE_RATE)[0][:10]
+#             if len(spectral_centroid) < 10:
+#                 spectral_centroid = np.pad(spectral_centroid, (0, 10-len(spectral_centroid)), mode='constant')
+#             
+#             # RMS enerji
+#             rms = librosa.feature.rms(y=audio_data)[0][:10]
+#             if len(rms) < 10:
+#                 rms = np.pad(rms, (0, 10-len(rms)), mode='constant')
+#             
+#             # Zero crossing rate
+#             zcr = librosa.feature.zero_crossing_rate(y=audio_data)[0][:10]
+#             if len(zcr) < 10:
+#                 zcr = np.pad(zcr, (0, 10-len(zcr)), mode='constant')
+#             
+#             # Spectral rolloff
+#             spectral_rolloff = librosa.feature.spectral_rolloff(y=audio_data, sr=SAMPLE_RATE)[0][:10]
+#             if len(spectral_rolloff) < 10:
+#                 spectral_rolloff = np.pad(spectral_rolloff, (0, 10-len(spectral_rolloff)), mode='constant')
+#             
+#             # Özellikleri birleştir (130 + 10 + 10 + 10 = 160)
+#             features = np.concatenate([
+#                 mfccs_flat,
+#                 spectral_centroid,
+#                 rms,
+#                 zcr,
+#                 spectral_rolloff
+#             ])
+#             
+#             return features[:160]  # Tam olarak 160 feature döndür
+#         except Exception as e:
+#             print(f"[UYARI] Feature çıkarımı hatası: {e}")
+#             return np.zeros(160)  # Hata durumunda sıfır vektörü döndür
+#     
+#     while sistem_aktif:
+#         if gorsel_kilit:
+#             time.sleep(0.5)  # Görsel kilit varsa sesi dinlemeye gerek yok
+#             continue
+#         
+#         try:
+#             # Stereo kayıt (2 kanal)
+#             recording = sd.rec(int(BUFFER_SIZE), samplerate=SAMPLE_RATE, channels=2, dtype='float32', device=audio_device)
+#             sd.wait()
+#             
+#             if recording is None or recording.size == 0:
+#                 print(f"[UYARI] Ses kaydı boş geldi.")
+#                 time.sleep(0.5)
+#                 continue
+#             
+#             # Sol ve sağ kanalları ayır
+#             left_channel = recording[:, 0]
+#             right_channel = recording[:, 1]
+#             
+#             # Her kanal için özellik çıkar ve tahmin yap
+#             left_features = extract_features(left_channel).reshape(1, -1)
+#             right_features = extract_features(right_channel).reshape(1, -1)
+#             
+#             if left_features.shape[1] != 160 or right_features.shape[1] != 160:
+#                 print(f"[UYARI] Feature sayısı hatalı: left={left_features.shape[1]}, right={right_features.shape[1]}")
+#                 time.sleep(0.5)
+#                 continue
+#             
+#             left_prediction = ses_modeli.predict(left_features)[0]
+#             right_prediction = ses_modeli.predict(right_features)[0]
+#             
+#             # Drone tespit kontrolü
+#             if left_prediction == 1:  # Sol tarafta drone
+#                 hedef_acisi = 270  # Batı (sol)
+#                 print(f"[AKUSTİK] 🎯 Sol Tarafta Drone Tespit Edildi! Yön: {hedef_acisi} Derece")
+#             elif right_prediction == 1:  # Sağ tarafta drone
+#                 hedef_acisi = 90  # Doğu (sağ)
+#                 print(f"[AKUSTİK] 🎯 Sağ Tarafta Drone Tespit Edildi! Yön: {hedef_acisi} Derece")
+#             
+#         except Exception as e:
+#             print(f"[HATA] Ses işleme hatası: {e}")
+#             time.sleep(1)
+#        
+#         time.sleep(0.1)  # Kısa bekleme
 
 # ====================================================================
 # 3. GÖRSEL İŞLEME VE ATEŞLEME MODÜLÜ (ANA DÖNGÜ)
@@ -539,21 +548,21 @@ def hibrit_sistem_baslat():
         print(f"[KRİTİK HATA] Kamera başlatma hatası: {e}. Sistem kapatılıyor...")
         sys.exit(1)
         
-    # 3. Ses Modelini Yükle ve Mikrofonu Aktif Et
-    global ses_modeli
-    try:
-        if not os.path.exists(SES_MODEL_PATH):
-            print(f"[UYARI] Ses modeli bulunamadı! Beklenen tam yol: {SES_MODEL_PATH}")
-            ses_modeli = None
-        else:
-            ses_modeli = joblib.load(SES_MODEL_PATH)
-            print("[BİLGİ] Ses modeli başarıyla yüklendi.")
-    except Exception as e:
-        print(f"[UYARI] Ses modeli yüklenemedi: {e}. Akustik tespit devre dışı.")
-        ses_modeli = None
+    # 3. Ses Modülü: Mikrofonlar söküldüğü için geçici olarak devre dışı bırakıldı.
+    # global ses_modeli
+    # try:
+    #     if not os.path.exists(SES_MODEL_PATH):
+    #         print(f"[UYARI] Ses modeli bulunamadı! Beklenen tam yol: {SES_MODEL_PATH}")
+    #         ses_modeli = None
+    #     else:
+    #         ses_modeli = joblib.load(SES_MODEL_PATH)
+    #         print("[BİLGİ] Ses modeli başarıyla yüklendi.")
+    # except Exception as e:
+    #     print(f"[UYARI] Ses modeli yüklenemedi: {e}. Akustik tespit devre dışı.")
+    #     ses_modeli = None
 
-    audio_thread = threading.Thread(target=audio_listener, daemon=True)
-    audio_thread.start()
+    # audio_thread = threading.Thread(target=audio_listener, daemon=True)
+    # audio_thread.start()
 
     # 4. Motorları Başlat
     motor_thread = threading.Thread(target=motor_kontrol_dongusu, daemon=True)
