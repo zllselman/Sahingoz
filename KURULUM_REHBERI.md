@@ -115,6 +115,25 @@ Kuleyi sahaya götürdüğünüzde ekrana takmadan fişini çeker çekmez kendi 
    WantedBy=multi-user.target
    ```
 3. Klavyeden sırasıyla `CTRL + O`, `Enter`, `CTRL + X` tuşlarına basarak kaydedin ve çıkın.
+
+---
+
+## ⚡ BÖLÜM 9: Güç Güvenliği ve Besleme Önerileri (ÖNEMLİ)
+
+Bu bölüm, sisteminizi saha koşullarında güvenli ve dayanıklı çalıştırmak için gereklidir. Lütfen alttaki adımları uygulayın:
+
+- **Ana Sigorta / Hızlı Kesici:** Ana güç beslemesine (batarya çıkışına) mutlaka uygun değerde bir sigorta yerleştirin. Öneri: Her bir motor kanalı için 3-5A hızlı sigorta; toplam sistem için 10A ana sigorta (batarya kapasitesine göre ayarlayın).
+- **Güç Dağıtımı (Power Distribution):** Motor güç hatları için kalın kablo kullanın (ana besleme için en az 18 AWG; motor dal hatları için 18–20 AWG arası). Sinyal kabloları için 22–26 AWG uygundur.
+- **De-coupling / Kondenser:** Motor besleme hattına, motorların yakınında büyük bir elektrolitik kondansatör (470uF - 2200uF, 10V veya 16V) ve bir adet 0.1uF seramik kondansatör paralel bağlayın. Bu, anlık akım sıçramalarını ve gürültüyü azaltır.
+- **Kill-switch (Acil Durdurma):** Sisteme kolay erişilebilen bir ana kapatma düğmesi (kill-switch) ekleyin. Kill-switch, ana güç hattını kesmeli veya motor sürücülerine acil kesme sinyali göndermelidir.
+- **Servo/ESC Sürücü ve PWM:** MG995 gibi güçlü servolar doğrudan Raspberry Pi ile çalıştırılabilir ama Raspberry Pi'nin yazılımsal PWM'i titreme (jitter) yaratabilir. Daha kararlı PWM için `PCA9685` gibi I2C tabanlı bir donanım PWM sürücüsü kullanmayı öneririm.
+- **Topraklama (COMMON GND):** Motor güç kaynağı ile Raspberry Pi mutlaka ortak toprakta bağlanmalıdır. Aksi halde sinyal referansları kayacak ve sinyal hataları oluşacaktır.
+- **Motor Sürücüsü/Amplifikatör:** Eğer motorlar çok yüksek akım çekiyorsa, motorlara uygun bir sürücü (MOSFET tabanlı anahtarlama veya servo sürücü) kullanın. Servo için genelde doğrudan güç verilir; ancak büyük projelerde harici sürücü kartları veya güç dağıtım panosu kullanın.
+- **Konnektör ve Terminal Blokları:** Besleme noktalarını vidalı terminal blokları, güç konektörleri (ör. XT60/XT30), veya kalite PDB (power distribution board) ile düzenleyin. Kabloların gevşek olmamasına dikkat edin.
+- **EMI / Gürültü Filtreleme:** Motor kablolarına ferrit halkalar koymak ve güç hattına LC filtreleri eklemek, mikrofon ve kamera gibi hassas ekipmanlarda paraziti azaltır.
+- **Test Prosedürü:** İlk güç bağlantısında önce Raspberry Pi'yi çalıştırmadan motor gücünü kısa süre verin ve akım/gerilim değerlerini ölçün. Herhangi bir anomali (aşırı ısınma, kısa devre) varsa bağlantıyı kesin.
+
+Bu adımlar, saha güvenliğini ve sistem kararlılığını büyük oranda artıracaktır. İsterseniz bu kısma örnek bir PDB ya da wiring diagram ekleyebilirim.
 4. Terminale şu iki komutu yazarak sistemi aktifleştirin:
    ```bash
    sudo systemctl daemon-reload

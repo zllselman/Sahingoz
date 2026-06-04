@@ -55,6 +55,10 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 YOLO_MODEL_PATH = os.path.join(BASE_DIR, "best.pt")
 SES_MODEL_PATH = os.path.join(BASE_DIR, "drone_audio_model.joblib")
 
+# Pan tarama aralığı (saniye). Ortam değişkeni ile üzerinde hızlı deneme yapabilirsiniz.
+# Önerilen deneme aralıkları: 1.5 - 2.5 (küçük servolar/voltage farklarına göre değişir).
+PAN_SCAN_INTERVAL = float(os.environ.get('PAN_SCAN_INTERVAL', '2.0'))
+
 def detect_display_available():
     """Ekran üzerinde GUI görüntüsü gösterilip gösterilemeyeceğini tespit eder."""
     if 'DISPLAY' in os.environ or 'WAYLAND_DISPLAY' in os.environ:
@@ -121,7 +125,7 @@ def motor_kontrol_dongusu():
     
     # Tarama sırasında sağa/sola ilerleyen Pan motor hızı
     SWEEP_SPEED = 0.12
-    SCAN_INTERVAL = 2.0  # Her 2 saniyede bir yön değiştirerek yaklaşık 120° tarama
+    SCAN_INTERVAL = PAN_SCAN_INTERVAL  # Pan tarama aralığı (saniye)
     scan_direction = 1
     last_scan_change = time.time()
     
